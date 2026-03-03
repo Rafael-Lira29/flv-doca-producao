@@ -118,12 +118,18 @@ elif menu == "📱 Porta da Doca":
         else:
             try:
                 df_temp = pd.DataFrame(sheet.worksheet(ABA_TEMP).get_all_records())
-                df_temp_loja = df_temp[df_temp["Loja"] == loja]
+                if not df_temp.empty and "Loja" in df_temp.columns:
+                    df_temp_loja = df_temp[df_temp["Loja"] == loja]
+                else:
+                    df_temp_loja = pd.DataFrame()
             except: df_temp_loja = pd.DataFrame()
 
             lista_final = []
             for _, item in df_loja.iterrows():
-                memoria = df_temp_loja[df_temp_loja["Produto"] == item["Produto"]]
+                if not df_temp_loja.empty and "Produto" in df_temp_loja.columns:
+                    memoria = df_temp_loja[df_temp_loja["Produto"] == item["Produto"]]
+                else:
+                    memoria = pd.DataFrame()
                 lista_final.append({
                     'Fornecedor': item['Fornecedor'],
                     'Produto': item['Produto'],
