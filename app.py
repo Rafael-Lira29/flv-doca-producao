@@ -147,10 +147,13 @@ elif menu == "📱 Porta da Doca":
                 with st.spinner("Guardando na memória..."):
                     ws_temp = sheet.worksheet(ABA_TEMP)
                     todos_temp = pd.DataFrame(ws_temp.get_all_records())
-                    if not todos_temp.empty:
+                    ws_temp.clear() # Limpa a gaveta primeiro
+                    
+                    # Vacina: Só tenta filtrar se a coluna Loja existir
+                    if not todos_temp.empty and "Loja" in todos_temp.columns:
                         outras_lojas = todos_temp[todos_temp["Loja"] != loja]
-                        ws_temp.clear()
-                        if not outras_lojas.empty: ws_temp.update([outras_lojas.columns.values.tolist()] + outras_lojas.values.tolist())
+                        if not outras_lojas.empty: 
+                            ws_temp.update([outras_lojas.columns.values.tolist()] + outras_lojas.values.tolist())
                     
                     upload_temp = editado.copy()
                     upload_temp.insert(0, 'Loja', loja)
@@ -196,9 +199,13 @@ elif menu == "📱 Porta da Doca":
 
                     # Limpa a memória temporária
                     todos_temp = pd.DataFrame(sheet.worksheet(ABA_TEMP).get_all_records())
-                    outras_lojas = todos_temp[todos_temp["Loja"] != loja]
-                    sheet.worksheet(ABA_TEMP).clear()
-                    if not outras_lojas.empty: sheet.worksheet(ABA_TEMP).update([outras_lojas.columns.values.tolist()] + outras_lojas.values.tolist())
+                    sheet.worksheet(ABA_TEMP).clear() # Limpa a gaveta primeiro
+                    
+                    # Vacina: Só tenta filtrar se a coluna Loja existir
+                    if not todos_temp.empty and "Loja" in todos_temp.columns:
+                        outras_lojas = todos_temp[todos_temp["Loja"] != loja]
+                        if not outras_lojas.empty: 
+                            sheet.worksheet(ABA_TEMP).update([outras_lojas.columns.values.tolist()] + outras_lojas.values.tolist())
                     
                     st.balloons()
                     st.success("Tudo pronto! Base de dados atualizada.")
