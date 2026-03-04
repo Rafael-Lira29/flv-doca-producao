@@ -124,7 +124,12 @@ elif menu == "📱 Porta da Doca":
         if "df_inicial" not in st.session_state:
             with st.spinner("Preparando a prancheta de contagem..."):
                 df_carga = pd.DataFrame(sheet.worksheet(ABA_CARGA).get_all_records())
-                df_loja = df_carga[df_carga["Loja"] == loja].copy()
+                
+                # Vacina de segurança: Verifica se a coluna "Loja" existe na Carga_Diaria
+                if not df_carga.empty and "Loja" in df_carga.columns:
+                    df_loja = df_carga[df_carga["Loja"] == loja].copy()
+                else:
+                    df_loja = pd.DataFrame()
                 
                 if df_loja.empty:
                     st.session_state.df_inicial = pd.DataFrame()
@@ -177,7 +182,7 @@ elif menu == "📱 Porta da Doca":
 
         # --- EXIBIÇÃO DA TABELA ---
         if st.session_state.df_inicial.empty:
-            st.success("Sem carga pendente para hoje.")
+            st.success("Tudo limpo! Sem carga pendente para hoje na sua doca.")
         else:
             editado = st.data_editor(
                 st.session_state.df_inicial, 
@@ -226,7 +231,7 @@ elif menu == "📱 Porta da Doca":
                     st.toast("Backup secundário salvo na planilha!")
 
             if c2.button("🏁 FINALIZAR CONFERÊNCIA"):
-                with st.spinner("A gravar no PostgreSQL e Sheets..."):
+                with st.spinner("Limpando a doca e guardando os dados definitivos..."):
                     hora_fim = hora_brasil().strftime("%H:%M:%S")
                     final = editado.copy()
                     
@@ -267,7 +272,7 @@ elif menu == "📱 Porta da Doca":
                             logger.error(f"Erro BD: {e}")
                             st.toast("Aviso: Falha no PostgreSQL, mas salvo na nuvem secundária!", icon="⚠️")
 
-                    # 4. LIMPEZA DA MEMÓRIA SECUNDÁRIA (Sheets e App)
+                    # 4. LIMPEZA DA MEMÓRIA SECUNDÁRIA (Sheets)
                     todos_temp = pd.DataFrame(sheet.worksheet(ABA_TEMP).get_all_records())
                     sheet.worksheet(ABA_TEMP).clear()
                     if not todos_temp.empty and "Loja" in todos_temp.columns:
@@ -275,10 +280,27 @@ elif menu == "📱 Porta da Doca":
                         if not outras_lojas.empty: 
                             sheet.worksheet(ABA_TEMP).update([outras_lojas.columns.values.tolist()] + outras_lojas.values.tolist())
                     
+                    # =========================================================
+                    # 5. O EFEITO PAC-MAN (Limpar a Carga Diária da Loja)
+                    # =========================================================
+                    todos_carga = pd.DataFrame(sheet.worksheet(ABA_CARGA).get_all_records())
+                    sheet.worksheet(ABA_CARGA).clear()
+                    if not todos_carga.empty and "Loja" in todos_carga.columns:
+                        outras_cargas = todos_carga[todos_carga["Loja"] != loja]
+                        if not outras_cargas.empty:
+                            sheet.worksheet(ABA_CARGA).update([outras_cargas.columns.values.tolist()] + outras_cargas.values.tolist())
+                        else:
+                            # Se era a última loja, devolve só o cabeçalho vazio
+                            sheet.worksheet(ABA_CARGA).update([["Data", "Loja", "Fornecedor", "Produto"]])
+                    else:
+                        sheet.worksheet(ABA_CARGA).update([["Data", "Loja", "Fornecedor", "Produto"]])
+                    
                     st.session_state.ultimo_rascunho_hash = None
-                    del st.session_state.df_inicial
+                    if "df_inicial" in st.session_state:
+                        del st.session_state.df_inicial
+                        
                     st.balloons()
-                    st.success("Tudo pronto! Base de dados atualizada.")
+                    st.success("Tudo pronto! Doca liberada e dados guardados com segurança.")
                     st.session_state.clear()
                     st.rerun()
 
