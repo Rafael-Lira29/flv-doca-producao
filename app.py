@@ -82,7 +82,6 @@ if st.session_state.usuario_logado:
 # ================= 🔐 PORTA DO COORDENADOR ================= #
 if menu == "🔐 Porta do Coordenador":
     st.title("⚙️ Gestão de Carga")
-    # O truque do autocomplete na senha do coordenador
     senha = st.text_input("Senha:", type="password", autocomplete="current-password")
     
     if senha == SENHA_COORDENADOR:
@@ -111,7 +110,6 @@ if menu == "🔐 Porta do Coordenador":
 elif menu == "📱 Porta da Doca":
     if not st.session_state.usuario_logado:
         with st.form("Login"):
-            # O truque do autocomplete acionando a memória do Google Chrome/Safari do celular
             usr = st.text_input("Usuário:", autocomplete="username")
             pwd = st.text_input("Senha:", type="password", autocomplete="current-password")
             
@@ -124,62 +122,74 @@ elif menu == "📱 Porta da Doca":
         loja, nome = st.session_state.loja_usuario, st.session_state.nome_usuario
         st.info(f"👤 {nome} | 🏬 {loja} | ⏱️ Início: {st.session_state.hora_inicio}")
         
-        df_carga = pd.DataFrame(sheet.worksheet(ABA_CARGA).get_all_records())
-        df_loja = df_carga[df_carga["Loja"] == loja].copy()
-        
-        if df_loja.empty:
+        # --- CARREGAMENTO ESTÁTICO (Só roda 1 vez ao fazer login) ---
+        if "df_inicial" not in st.session_state:
+            with st.spinner("Preparando a prancheta de contagem..."):
+                df_carga = pd.DataFrame(sheet.worksheet(ABA_CARGA).get_all_records())
+                df_loja = df_carga[df_carga["Loja"] == loja].copy()
+                
+                if df_loja.empty:
+                    st.session_state.df_inicial = pd.DataFrame()
+                else:
+                    # Busca rascunho no banco de dados
+                    draft_json = None
+                    if db_engine:
+                        try:
+                            query_draft = text("SELECT dados_json FROM doca_rascunho WHERE conferente = :conf AND loja = :loja AND data_conferencia = :dt")
+                            with db_engine.connect() as conn:
+                                res = conn.execute(query_draft, {"conf": nome, "loja": loja, "dt": hora_brasil().date()}).fetchone()
+                                if res: draft_json = json.loads(res[0])
+                        except Exception as e:
+                            logger.error(f"Erro ao carregar rascunho: {e}")
+
+                    df_draft = pd.DataFrame(draft_json) if draft_json else pd.DataFrame()
+                    if df_draft.empty:
+                        try:
+                            df_temp = pd.DataFrame(sheet.worksheet(ABA_TEMP).get_all_records())
+                            if not df_temp.empty and "Loja" in df_temp.columns:
+                                df_draft = df_temp[df_temp["Loja"] == loja]
+                        except: pass
+
+                    lista_final = []
+                    for _, item in df_loja.iterrows():
+                        memoria = pd.DataFrame()
+                        if not df_draft.empty and "Produto" in df_draft.columns:
+                            memoria = df_draft[df_draft["Produto"] == item["Produto"]]
+
+                        qtd_rec = float(memoria['Qtd_Recebida'].values[0]) if not memoria.empty and 'Qtd_Recebida' in memoria.columns and pd.notna(memoria['Qtd_Recebida'].values[0]) else 0.0
+                        
+                        padrao = ""
+                        if not memoria.empty:
+                            val = memoria['Padrão_Cx'].values[0] if 'Padrão_Cx' in memoria.columns else (memoria['Padrão_Caixa_Kg'].values[0] if 'Padrão_Caixa_Kg' in memoria.columns else "")
+                            if pd.notna(val) and str(val).lower() not in ["nan", "none"]: padrao = str(val)
+
+                        avaria = ""
+                        if not memoria.empty:
+                            val = memoria['Avaria'].values[0] if 'Avaria' in memoria.columns else (memoria['Avaria_Obs'].values[0] if 'Avaria_Obs' in memoria.columns else "")
+                            if pd.notna(val) and str(val).lower() not in ["nan", "none"]: avaria = str(val)
+
+                        lista_final.append({
+                            'Fornecedor': item['Fornecedor'],
+                            'Produto': item['Produto'],
+                            'Qtd_Recebida': qtd_rec,
+                            'Padrão_Cx': padrao,
+                            'Avaria': avaria
+                        })
+                    
+                    st.session_state.df_inicial = pd.DataFrame(lista_final)
+
+        # --- EXIBIÇÃO DA TABELA ---
+        if st.session_state.df_inicial.empty:
             st.success("Sem carga pendente para hoje.")
         else:
-            # --- BUSCA DO RASCUNHO FANTASMA (POSTGRESQL) ---
-            draft_json = None
-            if db_engine:
-                try:
-                    query_draft = text("SELECT dados_json FROM doca_rascunho WHERE conferente = :conf AND loja = :loja AND data_conferencia = :dt")
-                    with db_engine.connect() as conn:
-                        res = conn.execute(query_draft, {"conf": nome, "loja": loja, "dt": hora_brasil().date()}).fetchone()
-                        if res: draft_json = json.loads(res[0])
-                except Exception as e:
-                    logger.error(f"Erro ao carregar rascunho: {e}")
-
-            df_draft = pd.DataFrame(draft_json) if draft_json else pd.DataFrame()
-
-            # --- FALLBACK PARA ABA_TEMP (Se não houver BD ou Rascunho) ---
-            if df_draft.empty:
-                try:
-                    df_temp = pd.DataFrame(sheet.worksheet(ABA_TEMP).get_all_records())
-                    if not df_temp.empty and "Loja" in df_temp.columns:
-                        df_draft = df_temp[df_temp["Loja"] == loja]
-                except: pass
-
-            # Montando a tabela final de edição
-            lista_final = []
-            for _, item in df_loja.iterrows():
-                memoria = pd.DataFrame()
-                if not df_draft.empty and "Produto" in df_draft.columns:
-                    memoria = df_draft[df_draft["Produto"] == item["Produto"]]
-
-                qtd_rec = float(memoria['Qtd_Recebida'].values[0]) if not memoria.empty and 'Qtd_Recebida' in memoria.columns and pd.notna(memoria['Qtd_Recebida'].values[0]) else 0.0
-                
-                padrao = ""
-                if not memoria.empty:
-                    val = memoria['Padrão_Cx'].values[0] if 'Padrão_Cx' in memoria.columns else (memoria['Padrão_Caixa_Kg'].values[0] if 'Padrão_Caixa_Kg' in memoria.columns else "")
-                    if pd.notna(val) and str(val).lower() not in ["nan", "none"]: padrao = str(val)
-
-                avaria = ""
-                if not memoria.empty:
-                    val = memoria['Avaria'].values[0] if 'Avaria' in memoria.columns else (memoria['Avaria_Obs'].values[0] if 'Avaria_Obs' in memoria.columns else "")
-                    if pd.notna(val) and str(val).lower() not in ["nan", "none"]: avaria = str(val)
-
-                lista_final.append({
-                    'Fornecedor': item['Fornecedor'],
-                    'Produto': item['Produto'],
-                    'Qtd_Recebida': qtd_rec,
-                    'Padrão_Cx': padrao,
-                    'Avaria': avaria
-                })
-            
-            df_editor = pd.DataFrame(lista_final)
-            editado = st.data_editor(df_editor, disabled=["Fornecedor", "Produto"], hide_index=True, width='stretch')
+            # A chave 'editor_doca' e o 'df_inicial' estático impedem que a tela pule!
+            editado = st.data_editor(
+                st.session_state.df_inicial, 
+                disabled=["Fornecedor", "Produto"], 
+                hide_index=True, 
+                width='stretch',
+                key="editor_doca"
+            )
 
             # --- AUTO-SAVE INVISÍVEL (RASCUNHO FANTASMA) ---
             current_hash = hash(editado.to_string())
@@ -199,7 +209,7 @@ elif menu == "📱 Porta da Doca":
                     except Exception as e:
                         logger.error(f"Erro no Auto-Save: {e}")
 
-            st.caption("☁️ Auto-Save ativado: Suas edições são salvas automaticamente no banco de dados a cada alteração.")
+            st.caption("☁️ Auto-Save ativado: Suas edições são salvas sem interromper sua digitação.")
 
             c1, c2 = st.columns(2)
             
@@ -261,7 +271,7 @@ elif menu == "📱 Porta da Doca":
                             logger.error(f"Erro BD: {e}")
                             st.toast("Aviso: Falha no PostgreSQL, mas salvo na nuvem secundária!", icon="⚠️")
 
-                    # 4. LIMPEZA DA MEMÓRIA SECUNDÁRIA (Sheets)
+                    # 4. LIMPEZA DA MEMÓRIA SECUNDÁRIA (Sheets e App)
                     todos_temp = pd.DataFrame(sheet.worksheet(ABA_TEMP).get_all_records())
                     sheet.worksheet(ABA_TEMP).clear()
                     if not todos_temp.empty and "Loja" in todos_temp.columns:
