@@ -131,6 +131,7 @@ elif menu == "📱 Porta da Doca":
         
         if "df_inicial" not in st.session_state:
             with st.spinner("Preparando a prancheta de contagem..."):
+                # 1. Busca a Carga Planejada
                 def puxar_carga():
                     return pd.DataFrame(sheet.worksheet(ABA_CARGA).get_all_records())
                 
@@ -141,34 +142,41 @@ elif menu == "📱 Porta da Doca":
                     else: df_loja = pd.DataFrame()
                 except: df_loja = pd.DataFrame()
                 
-                if df_loja.empty:
+                # 2. Busca o Rascunho (INCONDICIONALMENTE - Correção do Bug 2)
+                draft_json = None
+                if db_engine:
+                    try:
+                        query_draft = text("SELECT dados_json FROM doca_rascunho WHERE conferente = :conf AND loja = :loja AND data_conferencia = :dt")
+                        with db_engine.connect() as conn:
+                            res = conn.execute(query_draft, {"conf": nome, "loja": loja, "dt": hora_brasil().date()}).fetchone()
+                            if res: draft_json = json.loads(res[0])
+                    except: pass
+
+                df_draft = pd.DataFrame(draft_json) if draft_json else pd.DataFrame()
+
+                # 3. Mescla os Dados
+                if df_loja.empty and df_draft.empty:
                     st.session_state.df_inicial = pd.DataFrame()
                 else:
-                    draft_json = None
-                    if db_engine:
-                        try:
-                            query_draft = text("SELECT dados_json FROM doca_rascunho WHERE conferente = :conf AND loja = :loja AND data_conferencia = :dt")
-                            with db_engine.connect() as conn:
-                                res = conn.execute(query_draft, {"conf": nome, "loja": loja, "dt": hora_brasil().date()}).fetchone()
-                                if res: draft_json = json.loads(res[0])
-                        except: pass
-
-                    df_draft = pd.DataFrame(draft_json) if draft_json else pd.DataFrame()
-                    
-                    # ======================================================
-                    # 🚀 ADEUS ITERROWS: VETORIZAÇÃO PANDAS NA VEIA
-                    # ======================================================
-                    base_df = df_loja[['Fornecedor', 'Produto']].copy()
+                    base_df = df_loja[['Fornecedor', 'Produto']].copy() if not df_loja.empty else pd.DataFrame(columns=['Fornecedor', 'Produto'])
                     
                     if not df_draft.empty and "Produto" in df_draft.columns:
-                        # Faz o cruzamento (Merge) na velocidade da luz
-                        merged = pd.merge(base_df, df_draft[['Produto', 'Qtd_Recebida', 'Padrão_Cx', 'Avaria']], on='Produto', how='left')
+                        # Correção do Bug 3: Blindagem contra KeyError
+                        colunas_necessarias = ['Produto', 'Qtd_Recebida', 'Padrão_Cx', 'Avaria']
+                        df_draft = df_draft.reindex(columns=df_draft.columns.union(colunas_necessarias))
+                        
+                        # Merge Vetorizado na velocidade da luz
+                        if not base_df.empty:
+                            merged = pd.merge(base_df, df_draft[colunas_necessarias], on='Produto', how='left')
+                        else:
+                            merged = pd.DataFrame(columns=['Fornecedor', 'Produto', 'Qtd_Recebida', 'Padrão_Cx', 'Avaria'])
+                            
                         merged['Qtd_Recebida'] = pd.to_numeric(merged['Qtd_Recebida'], errors='coerce').fillna(0.0)
                         merged['Padrão_Cx'] = merged['Padrão_Cx'].fillna("").astype(str)
                         merged['Avaria'] = merged['Avaria'].fillna("").astype(str)
                         
                         # Resgata os Produtos Extras que não estavam na carga original
-                        produtos_originais = base_df['Produto'].unique()
+                        produtos_originais = base_df['Produto'].unique() if not base_df.empty else []
                         extras = df_draft[~df_draft['Produto'].isin(produtos_originais)].copy()
                         
                         if not extras.empty:
@@ -249,9 +257,7 @@ elif menu == "📱 Porta da Doca":
                     hora_fim = hora_brasil().strftime("%H:%M:%S")
                     final = editado.copy()
                     
-                    # ======================================================
-                    # 🛡️ O ESCUDO DE CHUMBO NO POSTGRESQL (Tolerância Zero a Falhas)
-                    # ======================================================
+                    # 🛡️ O ESCUDO DE CHUMBO NO POSTGRESQL
                     if db_engine:
                         try:
                             df_sql = final.copy()
@@ -266,7 +272,7 @@ elif menu == "📱 Porta da Doca":
                         except Exception as e:
                             logger.error(f"Erro CRÍTICO no PostgreSQL: {e}")
                             st.error("🚨 Falha de conexão com o Banco de Dados! Seus dados continuam a salvo na tela. Verifique a internet e clique em Finalizar novamente.")
-                            st.stop() # Paralisa o aplicativo. Não deixa ele avançar para limpar a carga.
+                            st.stop()
                     
                     # GRAVAÇÃO GOOGLE SHEETS COM MOTOR DE RETRY
                     final_sheets = final.copy()
@@ -280,7 +286,7 @@ elif menu == "📱 Porta da Doca":
                         sheet.worksheet(ABA_CONTAGENS).append_rows(final_sheets.values.tolist())
                     tentar_google_sheets(salvar_historico)
 
-                    # O EFEITO PAC-MAN COM MOTOR DE RETRY (Anti-Colisão)
+                    # O EFEITO PAC-MAN COM MOTOR DE RETRY
                     def limpar_carga():
                         todos_carga = pd.DataFrame(sheet.worksheet(ABA_CARGA).get_all_records())
                         sheet.worksheet(ABA_CARGA).clear()
@@ -295,12 +301,18 @@ elif menu == "📱 Porta da Doca":
                     
                     tentar_google_sheets(limpar_carga)
                     
-                    st.session_state.ultimo_rascunho_hash = None
-                    if "df_inicial" in st.session_state: del st.session_state.df_inicial
-                        
+                    # ======================================================
+                    # 🚀 CORREÇÃO DO BUG 1: A EXPERIÊNCIA DO USUÁRIO (UX)
+                    # ======================================================
                     st.balloons()
                     st.success("Tudo pronto! Doca liberada e dados guardados com segurança.")
-                    st.session_state.clear()
+                    
+                    # Limpa apenas os dados de contagem, mantendo o login intacto
+                    st.session_state.ultimo_rascunho_hash = None
+                    if "df_inicial" in st.session_state: 
+                        del st.session_state["df_inicial"]
+                    
+                    time.sleep(3) # Dá tempo para a equipe comemorar a tela verde e os balões 🎉
                     st.rerun()
 
 # ================= 📊 PAINEL DE REGISTROS ================= #
