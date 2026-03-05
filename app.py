@@ -131,7 +131,6 @@ elif menu == "📱 Porta da Doca":
         
         if "df_inicial" not in st.session_state:
             with st.spinner("Preparando a prancheta de contagem..."):
-                # 1. Busca a Carga Planejada
                 def puxar_carga():
                     return pd.DataFrame(sheet.worksheet(ABA_CARGA).get_all_records())
                 
@@ -142,7 +141,7 @@ elif menu == "📱 Porta da Doca":
                     else: df_loja = pd.DataFrame()
                 except: df_loja = pd.DataFrame()
                 
-                # 2. Busca o Rascunho (INCONDICIONALMENTE - Correção do Bug 2)
+                # Busca o Rascunho (Soberano)
                 draft_json = None
                 if db_engine:
                     try:
@@ -154,18 +153,16 @@ elif menu == "📱 Porta da Doca":
 
                 df_draft = pd.DataFrame(draft_json) if draft_json else pd.DataFrame()
 
-                # 3. Mescla os Dados
+                # Mescla os Dados
                 if df_loja.empty and df_draft.empty:
                     st.session_state.df_inicial = pd.DataFrame()
                 else:
                     base_df = df_loja[['Fornecedor', 'Produto']].copy() if not df_loja.empty else pd.DataFrame(columns=['Fornecedor', 'Produto'])
                     
                     if not df_draft.empty and "Produto" in df_draft.columns:
-                        # Correção do Bug 3: Blindagem contra KeyError
                         colunas_necessarias = ['Produto', 'Qtd_Recebida', 'Padrão_Cx', 'Avaria']
                         df_draft = df_draft.reindex(columns=df_draft.columns.union(colunas_necessarias))
                         
-                        # Merge Vetorizado na velocidade da luz
                         if not base_df.empty:
                             merged = pd.merge(base_df, df_draft[colunas_necessarias], on='Produto', how='left')
                         else:
@@ -175,7 +172,6 @@ elif menu == "📱 Porta da Doca":
                         merged['Padrão_Cx'] = merged['Padrão_Cx'].fillna("").astype(str)
                         merged['Avaria'] = merged['Avaria'].fillna("").astype(str)
                         
-                        # Resgata os Produtos Extras que não estavam na carga original
                         produtos_originais = base_df['Produto'].unique() if not base_df.empty else []
                         extras = df_draft[~df_draft['Produto'].isin(produtos_originais)].copy()
                         
@@ -197,7 +193,6 @@ elif menu == "📱 Porta da Doca":
                         final_df['Padrão_Cx'] = ""
                         final_df['Avaria'] = ""
                         
-                    # Limpeza de strings 'nan' perdidas
                     final_df['Padrão_Cx'] = final_df['Padrão_Cx'].replace(['nan', 'None', 'NaN'], "")
                     final_df['Avaria'] = final_df['Avaria'].replace(['nan', 'None', 'NaN'], "")
                     
@@ -228,7 +223,7 @@ elif menu == "📱 Porta da Doca":
 
             st.caption("☁️ Auto-Save ativado: Suas edições são salvas em tempo real no banco principal.")
 
-            # --- ADICIONAR PRODUTO EXTRA (SOLUÇÃO PARA FLV DINÂMICO) ---
+            # --- ADICIONAR PRODUTO EXTRA ---
             with st.expander("➕ Adicionar Produto Não Planejado (Divergência)"):
                 with st.form("form_extra"):
                     c_forn, c_prod = st.columns(2)
@@ -252,68 +247,88 @@ elif menu == "📱 Porta da Doca":
                         else:
                             st.warning("Preencha o nome do produto.")
 
-            if st.button("🏁 FINALIZAR CONFERÊNCIA"):
-                with st.spinner("Limpando a doca e guardando os dados (Fila Inteligente ativada)..."):
-                    hora_fim = hora_brasil().strftime("%H:%M:%S")
-                    final = editado.copy()
-                    
-                    # 🛡️ O ESCUDO DE CHUMBO NO POSTGRESQL
-                    if db_engine:
-                        try:
-                            df_sql = final.copy()
-                            df_sql = df_sql.rename(columns={"Produto": "codigo_produto", "Qtd_Recebida": "quantidade_conferida", "Avaria": "divergencia"})
-                            df_sql["loja"], df_sql["conferente"], df_sql["data_hora"] = loja, nome, hora_brasil()
-                            df_sql = df_sql[["codigo_produto", "quantidade_conferida", "divergencia", "loja", "conferente", "data_hora"]]
-                            
-                            with db_engine.begin() as conn:
-                                df_sql.to_sql("itens_conferencia", conn, if_exists="append", index=False)
+            st.markdown("---")
+            
+            # ======================================================
+            # 🚀 A BORRACHA MÁGICA E A FINALIZAÇÃO (BOTÕES)
+            # ======================================================
+            col_reset, col_final = st.columns(2)
+            
+            with col_reset:
+                if st.button("🗑️ Descartar Rascunho (Recomeçar)"):
+                    with st.spinner("Apagando rascunho de segurança..."):
+                        if db_engine:
+                            try:
                                 query_del = text("DELETE FROM doca_rascunho WHERE conferente = :conf AND loja = :loja AND data_conferencia = :dt")
-                                conn.execute(query_del, {"conf": nome, "loja": loja, "dt": hora_brasil().date()})
-                        except Exception as e:
-                            logger.error(f"Erro CRÍTICO no PostgreSQL: {e}")
-                            st.error("🚨 Falha de conexão com o Banco de Dados! Seus dados continuam a salvo na tela. Verifique a internet e clique em Finalizar novamente.")
-                            st.stop()
-                    
-                    # GRAVAÇÃO GOOGLE SHEETS COM MOTOR DE RETRY
-                    final_sheets = final.copy()
-                    final_sheets.insert(0, 'Conferente', nome)
-                    final_sheets.insert(1, 'Hora_Fim', hora_fim)
-                    final_sheets.insert(2, 'Hora_Inicio', st.session_state.hora_inicio)
-                    final_sheets.insert(3, 'Data', hora_brasil().strftime("%d/%m/%Y"))
-                    final_sheets.insert(4, 'Loja', loja)
-                    
-                    def salvar_historico():
-                        sheet.worksheet(ABA_CONTAGENS).append_rows(final_sheets.values.tolist())
-                    tentar_google_sheets(salvar_historico)
+                                with db_engine.begin() as conn:
+                                    conn.execute(query_del, {"conf": nome, "loja": loja, "dt": hora_brasil().date()})
+                            except Exception as e:
+                                logger.error(f"Erro ao deletar rascunho: {e}")
+                        
+                        st.session_state.ultimo_rascunho_hash = None
+                        if "df_inicial" in st.session_state: 
+                            del st.session_state["df_inicial"]
+                        
+                        st.warning("🧹 Rascunho apagado! A prancheta foi resetada para o planejamento original.")
+                        time.sleep(2)
+                        st.rerun()
 
-                    # O EFEITO PAC-MAN COM MOTOR DE RETRY
-                    def limpar_carga():
-                        todos_carga = pd.DataFrame(sheet.worksheet(ABA_CARGA).get_all_records())
-                        sheet.worksheet(ABA_CARGA).clear()
-                        if not todos_carga.empty and "Loja" in todos_carga.columns:
-                            outras_cargas = todos_carga[todos_carga["Loja"] != loja]
-                            if not outras_cargas.empty:
-                                sheet.worksheet(ABA_CARGA).update([outras_cargas.columns.values.tolist()] + outras_cargas.values.tolist())
+            with col_final:
+                if st.button("🏁 FINALIZAR CONFERÊNCIA"):
+                    with st.spinner("Limpando a doca e guardando os dados (Fila Inteligente ativada)..."):
+                        hora_fim = hora_brasil().strftime("%H:%M:%S")
+                        final = editado.copy()
+                        
+                        if db_engine:
+                            try:
+                                df_sql = final.copy()
+                                df_sql = df_sql.rename(columns={"Produto": "codigo_produto", "Qtd_Recebida": "quantidade_conferida", "Avaria": "divergencia"})
+                                df_sql["loja"], df_sql["conferente"], df_sql["data_hora"] = loja, nome, hora_brasil()
+                                df_sql = df_sql[["codigo_produto", "quantidade_conferida", "divergencia", "loja", "conferente", "data_hora"]]
+                                
+                                with db_engine.begin() as conn:
+                                    df_sql.to_sql("itens_conferencia", conn, if_exists="append", index=False)
+                                    query_del = text("DELETE FROM doca_rascunho WHERE conferente = :conf AND loja = :loja AND data_conferencia = :dt")
+                                    conn.execute(query_del, {"conf": nome, "loja": loja, "dt": hora_brasil().date()})
+                            except Exception as e:
+                                logger.error(f"Erro CRÍTICO no PostgreSQL: {e}")
+                                st.error("🚨 Falha de conexão com o Banco de Dados! Seus dados continuam a salvo na tela. Verifique a internet e clique em Finalizar novamente.")
+                                st.stop()
+                        
+                        final_sheets = final.copy()
+                        final_sheets.insert(0, 'Conferente', nome)
+                        final_sheets.insert(1, 'Hora_Fim', hora_fim)
+                        final_sheets.insert(2, 'Hora_Inicio', st.session_state.hora_inicio)
+                        final_sheets.insert(3, 'Data', hora_brasil().strftime("%d/%m/%Y"))
+                        final_sheets.insert(4, 'Loja', loja)
+                        
+                        def salvar_historico():
+                            sheet.worksheet(ABA_CONTAGENS).append_rows(final_sheets.values.tolist())
+                        tentar_google_sheets(salvar_historico)
+
+                        def limpar_carga():
+                            todos_carga = pd.DataFrame(sheet.worksheet(ABA_CARGA).get_all_records())
+                            sheet.worksheet(ABA_CARGA).clear()
+                            if not todos_carga.empty and "Loja" in todos_carga.columns:
+                                outras_cargas = todos_carga[todos_carga["Loja"] != loja]
+                                if not outras_cargas.empty:
+                                    sheet.worksheet(ABA_CARGA).update([outras_cargas.columns.values.tolist()] + outras_cargas.values.tolist())
+                                else:
+                                    sheet.worksheet(ABA_CARGA).update([["Data", "Loja", "Fornecedor", "Produto"]])
                             else:
                                 sheet.worksheet(ABA_CARGA).update([["Data", "Loja", "Fornecedor", "Produto"]])
-                        else:
-                            sheet.worksheet(ABA_CARGA).update([["Data", "Loja", "Fornecedor", "Produto"]])
-                    
-                    tentar_google_sheets(limpar_carga)
-                    
-                    # ======================================================
-                    # 🚀 CORREÇÃO DO BUG 1: A EXPERIÊNCIA DO USUÁRIO (UX)
-                    # ======================================================
-                    st.balloons()
-                    st.success("Tudo pronto! Doca liberada e dados guardados com segurança.")
-                    
-                    # Limpa apenas os dados de contagem, mantendo o login intacto
-                    st.session_state.ultimo_rascunho_hash = None
-                    if "df_inicial" in st.session_state: 
-                        del st.session_state["df_inicial"]
-                    
-                    time.sleep(3) # Dá tempo para a equipe comemorar a tela verde e os balões 🎉
-                    st.rerun()
+                        
+                        tentar_google_sheets(limpar_carga)
+                        
+                        st.balloons()
+                        st.success("Tudo pronto! Doca liberada e dados guardados com segurança.")
+                        
+                        st.session_state.ultimo_rascunho_hash = None
+                        if "df_inicial" in st.session_state: 
+                            del st.session_state["df_inicial"]
+                        
+                        time.sleep(3) 
+                        st.rerun()
 
 # ================= 📊 PAINEL DE REGISTROS ================= #
 else:
