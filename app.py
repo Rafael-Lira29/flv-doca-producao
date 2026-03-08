@@ -34,14 +34,14 @@ SENHA_COORDENADOR = st.secrets["senha_coordenador"]
 def hora_brasil():
     return datetime.utcnow() - timedelta(hours=3)
 
-# --- MOTOR DE FILA DE ESPERA (EVITA COLISÃO E ERRO 429 DO GOOGLE) ---
+# --- MOTOR DE FILA DE ESPERA ---
 def tentar_google_sheets(funcao, max_tentativas=3):
     for tentativa in range(max_tentativas):
         try:
             return funcao()
         except Exception as e:
             if tentativa < max_tentativas - 1:
-                tempo_espera = 2 ** tentativa # Espera 1s, depois 2s, depois 4s...
+                tempo_espera = 2 ** tentativa
                 logger.warning(f"Google Sheets ocupado. Tentando novamente em {tempo_espera}s...")
                 time.sleep(tempo_espera)
             else:
@@ -141,7 +141,7 @@ elif menu == "📱 Porta da Doca":
                     else: df_loja = pd.DataFrame()
                 except: df_loja = pd.DataFrame()
                 
-                # Busca o Rascunho (Soberano)
+                # Busca o Rascunho
                 draft_json = None
                 if db_engine:
                     try:
@@ -153,37 +153,40 @@ elif menu == "📱 Porta da Doca":
 
                 df_draft = pd.DataFrame(draft_json) if draft_json else pd.DataFrame()
 
-                # Mescla os Dados
+                # Mescla os Dados com a nova coluna Nº_NFe blindada
                 if df_loja.empty and df_draft.empty:
                     st.session_state.df_inicial = pd.DataFrame()
                 else:
                     base_df = df_loja[['Fornecedor', 'Produto']].copy() if not df_loja.empty else pd.DataFrame(columns=['Fornecedor', 'Produto'])
                     
                     if not df_draft.empty and "Produto" in df_draft.columns:
-                        colunas_necessarias = ['Produto', 'Qtd_Recebida', 'Padrão_Cx', 'Avaria']
+                        if 'Nº_NFe' not in df_draft.columns: df_draft['Nº_NFe'] = ""
+                        colunas_necessarias = ['Produto', 'Qtd_Recebida', 'Padrão_Cx', 'Avaria', 'Nº_NFe']
                         df_draft = df_draft.reindex(columns=df_draft.columns.union(colunas_necessarias))
                         
                         if not base_df.empty:
                             merged = pd.merge(base_df, df_draft[colunas_necessarias], on='Produto', how='left')
                         else:
-                            merged = pd.DataFrame(columns=['Fornecedor', 'Produto', 'Qtd_Recebida', 'Padrão_Cx', 'Avaria'])
+                            merged = pd.DataFrame(columns=['Fornecedor', 'Produto', 'Qtd_Recebida', 'Padrão_Cx', 'Avaria', 'Nº_NFe'])
                             
                         merged['Qtd_Recebida'] = pd.to_numeric(merged['Qtd_Recebida'], errors='coerce').fillna(0.0)
                         merged['Padrão_Cx'] = merged['Padrão_Cx'].fillna("").astype(str)
                         merged['Avaria'] = merged['Avaria'].fillna("").astype(str)
+                        merged['Nº_NFe'] = merged['Nº_NFe'].fillna("").astype(str)
                         
                         produtos_originais = base_df['Produto'].unique() if not base_df.empty else []
                         extras = df_draft[~df_draft['Produto'].isin(produtos_originais)].copy()
                         
                         if not extras.empty:
-                            for col in ['Fornecedor', 'Qtd_Recebida', 'Padrão_Cx', 'Avaria']:
+                            for col in ['Fornecedor', 'Qtd_Recebida', 'Padrão_Cx', 'Avaria', 'Nº_NFe']:
                                 if col not in extras.columns:
                                     extras[col] = "EXTRA" if col == 'Fornecedor' else (0.0 if col == 'Qtd_Recebida' else "")
                             
-                            extras = extras[['Fornecedor', 'Produto', 'Qtd_Recebida', 'Padrão_Cx', 'Avaria']]
+                            extras = extras[['Fornecedor', 'Produto', 'Qtd_Recebida', 'Padrão_Cx', 'Avaria', 'Nº_NFe']]
                             extras['Qtd_Recebida'] = pd.to_numeric(extras['Qtd_Recebida'], errors='coerce').fillna(0.0)
                             extras['Padrão_Cx'] = extras['Padrão_Cx'].fillna("").astype(str)
                             extras['Avaria'] = extras['Avaria'].fillna("").astype(str)
+                            extras['Nº_NFe'] = extras['Nº_NFe'].fillna("").astype(str)
                             final_df = pd.concat([merged, extras], ignore_index=True)
                         else:
                             final_df = merged
@@ -192,9 +195,11 @@ elif menu == "📱 Porta da Doca":
                         final_df['Qtd_Recebida'] = 0.0
                         final_df['Padrão_Cx'] = ""
                         final_df['Avaria'] = ""
+                        final_df['Nº_NFe'] = ""
                         
                     final_df['Padrão_Cx'] = final_df['Padrão_Cx'].replace(['nan', 'None', 'NaN'], "")
                     final_df['Avaria'] = final_df['Avaria'].replace(['nan', 'None', 'NaN'], "")
+                    final_df['Nº_NFe'] = final_df['Nº_NFe'].replace(['nan', 'None', 'NaN'], "")
                     
                     st.session_state.df_inicial = final_df
 
@@ -229,9 +234,10 @@ elif menu == "📱 Porta da Doca":
                     c_forn, c_prod = st.columns(2)
                     novo_forn = c_forn.text_input("Fornecedor (Opcional)")
                     novo_prod = c_prod.text_input("Nome do Produto Recebido")
-                    c_qtd, c_pad = st.columns(2)
+                    c_qtd, c_pad, c_nfe = st.columns(3)
                     nova_qtd = c_qtd.number_input("Qtd Recebida", min_value=0.0, step=1.0)
                     novo_pad = c_pad.text_input("Padrão (Cx/Kg)")
+                    nova_nfe = c_nfe.text_input("Nº NFe (Físico)")
                     
                     if st.form_submit_button("Inserir na Prancheta"):
                         if novo_prod:
@@ -240,7 +246,8 @@ elif menu == "📱 Porta da Doca":
                                 'Produto': f"⚠️ EXTRA: {novo_prod.upper()}", 
                                 'Qtd_Recebida': nova_qtd, 
                                 'Padrão_Cx': novo_pad, 
-                                'Avaria': ""
+                                'Avaria': "",
+                                'Nº_NFe': nova_nfe
                             }])
                             st.session_state.df_inicial = pd.concat([st.session_state.df_inicial, novo_item], ignore_index=True)
                             st.rerun()
@@ -250,7 +257,7 @@ elif menu == "📱 Porta da Doca":
             st.markdown("---")
             
             # ======================================================
-            # 🚀 A BORRACHA MÁGICA E A FINALIZAÇÃO (BOTÕES)
+            # 🚀 A BORRACHA MÁGICA E A FINALIZAÇÃO
             # ======================================================
             col_reset, col_final = st.columns(2)
             
@@ -282,9 +289,10 @@ elif menu == "📱 Porta da Doca":
                         if db_engine:
                             try:
                                 df_sql = final.copy()
-                                df_sql = df_sql.rename(columns={"Produto": "codigo_produto", "Qtd_Recebida": "quantidade_conferida", "Avaria": "divergencia"})
+                                df_sql = df_sql.rename(columns={"Produto": "codigo_produto", "Qtd_Recebida": "quantidade_conferida", "Avaria": "divergencia", "Nº_NFe": "numero_nfe"})
                                 df_sql["loja"], df_sql["conferente"], df_sql["data_hora"] = loja, nome, hora_brasil()
-                                df_sql = df_sql[["codigo_produto", "quantidade_conferida", "divergencia", "loja", "conferente", "data_hora"]]
+                                # numero_nfe vai por último para não desalinhar a arquitetura atual
+                                df_sql = df_sql[["codigo_produto", "quantidade_conferida", "divergencia", "loja", "conferente", "data_hora", "numero_nfe"]]
                                 
                                 with db_engine.begin() as conn:
                                     df_sql.to_sql("itens_conferencia", conn, if_exists="append", index=False)
@@ -301,6 +309,7 @@ elif menu == "📱 Porta da Doca":
                         final_sheets.insert(2, 'Hora_Inicio', st.session_state.hora_inicio)
                         final_sheets.insert(3, 'Data', hora_brasil().strftime("%d/%m/%Y"))
                         final_sheets.insert(4, 'Loja', loja)
+                        # A coluna Nº_NFe já está na última posição da variável 'final' e será adicionada ao final da tabela do Sheets
                         
                         def salvar_historico():
                             sheet.worksheet(ABA_CONTAGENS).append_rows(final_sheets.values.tolist())
