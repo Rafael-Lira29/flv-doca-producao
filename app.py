@@ -286,6 +286,19 @@ elif menu == "📱 Porta da Doca":
                         hora_fim = hora_brasil().strftime("%H:%M:%S")
                         final = editado.copy()
                         
+                        # =========================================================
+                        # 🪄 MÁGICA DA SEXTA-FEIRA: AUTO-PREENCHIMENTO DE NFe
+                        # =========================================================
+                        # 1. Cria um "mapa" de fornecedores que tiveram a NFe preenchida
+                        mapa_nfe = final[final['Nº_NFe'].astype(str).str.strip() != ""].groupby('Fornecedor')['Nº_NFe'].first().to_dict()
+                        
+                        # 2. Preenche os buracos: se a NFe estiver vazia, copia a do mapa (do mesmo fornecedor)
+                        final['Nº_NFe'] = final.apply(
+                            lambda row: mapa_nfe.get(row['Fornecedor'], row['Nº_NFe']) if str(row['Nº_NFe']).strip() == "" else row['Nº_NFe'], 
+                            axis=1
+                        )
+                        # =========================================================
+
                         if db_engine:
                             try:
                                 df_sql = final.copy()
